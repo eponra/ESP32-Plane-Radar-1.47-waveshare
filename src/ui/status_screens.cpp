@@ -11,11 +11,18 @@
 #include "hardware/display.h"
 #include "hardware/display_font.h"
 
+namespace fonts = lgfx::v1::fonts;
+
 namespace {
 
 constexpr int kLineGap = 6;
-const int kCenterX = config::kDisplayWidth / 2;
-const int kCenterY = config::kDisplayHeight / 2;
+static inline int displayCenterX() {
+  return tft.width() / 2;
+}
+
+static inline int displayCenterY() {
+  return tft.height() / 2;
+}
 
 constexpr int kSpinnerDotCount = 10;
 constexpr int kSpinnerRadius = 113;
@@ -68,31 +75,44 @@ void applyLineStyle(const TextLine& line) {
   }
 }
 
-void drawTextBlock(uint16_t bg, uint16_t fg, const TextLine* lines, size_t count) {
+void drawTextBlock(uint16_t bg,
+                  uint16_t fg,
+                  const TextLine* lines,
+                  size_t count,
+                  bool alignToTop = false) {
   tft.fillScreen(bg);
   tft.setTextColor(fg, bg);
   tft.setTextDatum(textdatum_t::middle_center);
 
-  int total_h = 0;
+  int totalHeight = 0;
+
   for (size_t i = 0; i < count; ++i) {
     if (displayFontIsSmooth()) {
-      total_h += lineHeightVlw(lines[i].vlw_size);
+      totalHeight += lineHeightVlw(lines[i].vlw_size);
     } else {
-      total_h += lineHeightGfx(lines[i].gfx_font);
+      totalHeight += lineHeightGfx(lines[i].gfx_font);
     }
+
     if (i + 1 < count) {
-      total_h += kLineGap;
+      totalHeight += kLineGap;
     }
   }
 
-  int y = (config::kDisplayHeight - total_h) / 2;
+  const int topMargin = alignToTop ? 0 : (tft.height() - totalHeight) / 2;
+  int y = topMargin;
+
   for (size_t i = 0; i < count; ++i) {
     applyLineStyle(lines[i]);
-    const int h =
-        displayFontIsSmooth() ? lineHeightVlw(lines[i].vlw_size)
-                              : lineHeightGfx(lines[i].gfx_font);
-    tft.drawString(lines[i].text, kCenterX, y + h / 2);
-    y += h + kLineGap;
+
+    const int lineHeight = displayFontIsSmooth()
+                               ? lineHeightVlw(lines[i].vlw_size)
+                               : lineHeightGfx(lines[i].gfx_font);
+
+    tft.drawString(lines[i].text,
+                   tft.width() / 2,
+                   y + lineHeight / 2);
+
+    y += lineHeight + kLineGap;
   }
 }
 
@@ -133,17 +153,31 @@ void drawConnectingText() {
   tft.setTextColor(config::kTextOnBlack, config::kColorBlack);
 
   applyConnectingDetailStyle();
-  const int detail_h = tft.fontHeight();
-  const int total_h = detail_h * 2 + kLineGap;
-  const int block_top = (config::kDisplayHeight - total_h) / 2;
-  constexpr int kPanelPadY = 8;
-  tft.fillRect(kCenterX - kConnectingTextMaxWidthPx / 2, block_top - kPanelPadY,
-               kConnectingTextMaxWidthPx, total_h + kPanelPadY * 2, config::kColorBlack);
 
-  int y = block_top;
-  tft.drawString("Connecting to", kCenterX, y + detail_h / 2);
-  y += detail_h + kLineGap;
-  tft.drawString(s_ssid_line, kCenterX, y + detail_h / 2);
+  const int detailHeight = tft.fontHeight();
+  const int totalHeight = detailHeight * 2 + kLineGap;
+  const int blockTop = (tft.height() - totalHeight) / 2;
+
+  constexpr int kPanelPadY = 8;
+
+  tft.fillRect(
+      tft.width() / 2 - kConnectingTextMaxWidthPx / 2,
+      blockTop - kPanelPadY,
+      kConnectingTextMaxWidthPx,
+      totalHeight + kPanelPadY * 2,
+      config::kColorBlack);
+
+  int y = blockTop;
+
+  tft.drawString("Connecting to",
+                 tft.width() / 2,
+                 y + detailHeight / 2);
+
+  y += detailHeight + kLineGap;
+
+  tft.drawString(s_ssid_line,
+                 tft.width() / 2,
+                 y + detailHeight / 2);
 
   s_connecting_text_drawn = true;
 }
@@ -165,8 +199,14 @@ void drawSpinnerDots() {
 
   for (int i = 0; i < kSpinnerDotCount; ++i) {
     const float a = head_rad - static_cast<float>(i) * (6.283185307f / kSpinnerDotCount);
-    const int x = kCenterX + static_cast<int>(std::lround(std::cos(a) * kSpinnerRadius));
-    const int y = kCenterY + static_cast<int>(std::lround(std::sin(a) * kSpinnerRadius));
+    const int centerX = tft.width() / 2;
+    const int centerY = tft.height() / 2;
+
+    const int x = centerX + static_cast<int>(
+        std::lround(std::cos(a) * kSpinnerRadius));
+
+    const int y = centerY + static_cast<int>(
+        std::lround(std::sin(a) * kSpinnerRadius));
 
     const int fade = 255 - i * 22;
     const uint16_t color = tft.color565(0, fade, 0);
@@ -215,8 +255,11 @@ void statusScreenPortal() {
       {config::kPortalHostUrl, 1.12f, &kPortalGfxEmphasis},
       {"or 192.168.4.1", 1.0f, &kPortalGfxBody},
   };
-  drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
-                sizeof(lines) / sizeof(lines[0]));
+  drawTextBlock(config::kColorYellow,
+              config::kTextOnYellow,
+              lines,
+              sizeof(lines) / sizeof(lines[0]),
+              true);
 }
 
 void statusScreenConnectFailed() {
