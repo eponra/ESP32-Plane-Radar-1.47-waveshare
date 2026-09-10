@@ -1,8 +1,12 @@
 # ESP32 Plane Radar — Waveshare ESP32-C6 LCD 1.47" Edition
+<img width="1531" height="1148" alt="grafik" src="https://github.com/user-attachments/assets/c27fce57-7830-41dc-91f5-40bd0fb2a782" />
 
 A display adaptation and feature-enhanced fork of [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
 This version keeps the original idea — a compact ESP32-based ADS-B radar displaying nearby aircraft — and adapts it for the **Waveshare ESP32-C6-LCD-1.47**, featuring a 1.47-inch rectangular ST7789 display with 172 × 320 pixels. It also adds a selectable aircraft information panel and several hardware controls for brightness, display rotation, range selection, and aircraft selection.
+
+<img width="613" height="526" alt="grafik" src="https://github.com/user-attachments/assets/dde8b43d-6dd4-4d79-a190-e7f35dadcf58" />
+
 
 > This repository is an independent fork. The original project and its authorship remain credited to [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
