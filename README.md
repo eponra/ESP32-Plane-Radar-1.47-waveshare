@@ -6,11 +6,16 @@ A display adaptation and feature-enhanced fork of [MatixYo/ESP32-Plane-Radar](ht
 This version keeps the original idea — a compact ESP32-based ADS-B radar displaying nearby aircraft — and adapts it for the **Waveshare ESP32-C6-LCD-1.47**, featuring a 1.47-inch rectangular ST7789 display with 172 × 320 pixels. It also adds a selectable aircraft information panel and several hardware controls for brightness, display rotation, range selection, and aircraft selection.
 
 <img width="613" height="526" alt="grafik" src="https://github.com/user-attachments/assets/dde8b43d-6dd4-4d79-a190-e7f35dadcf58" />
+<img width="325" height="254" alt="grafik" src="https://github.com/user-attachments/assets/6ab39ce3-d4fa-47df-bc97-95eea33953e0" />
+(backview with the buttons for rotation, brightness down and brightness up)
 
 
-As you see here, this can be used in the 3Dprinted case with 5 external buttons, which i designed and will be uploaded and linked here very soon, OR the display alone in any printed case you can find fort it.
+
+As you see here, this can be used in the 3Dprinted case with 5 external buttons, which i designed and will be uploaded and linked here very soon, OR the display alone in any printed case you can find for it.
+
 <img width="477" height="331" alt="grafik" src="https://github.com/user-attachments/assets/2fa547d2-53ec-42a5-bee8-218736c3be61" />
 If you only use the display, you can switch planes with a single click (it waits 1.4sec for the second input; so thats why you may think its slow), switch ranges with a doubleclick (again, in the first 1.4 seconds the second click should have happened), and switch orientation with a tripleclick (you have 1.4+1.2sec for the third click, so 2.6sec overall).
+You cant change the brightness with buttons on the display only version; you have to edit the brightness in the config.h)
 
 > This repository is an independent fork. The original project and its authorship remain credited to [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
