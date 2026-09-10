@@ -7,7 +7,7 @@ This version keeps the original idea — a compact ESP32-based ADS-B radar displ
 
 <img width="613" height="526" alt="grafik" src="https://github.com/user-attachments/assets/dde8b43d-6dd4-4d79-a190-e7f35dadcf58" />
 <img width="325" height="254" alt="grafik" src="https://github.com/user-attachments/assets/6ab39ce3-d4fa-47df-bc97-95eea33953e0" />
-(backview with the buttons for rotation, brightness down and brightness up)
+(backview with the buttons for rotation, brightness down and brightness up, also the extra USB-C-Port that lets you power it from the back)
 
 
 
