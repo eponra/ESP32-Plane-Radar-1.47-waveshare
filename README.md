@@ -8,6 +8,10 @@ This version keeps the original idea — a compact ESP32-based ADS-B radar displ
 <img width="613" height="526" alt="grafik" src="https://github.com/user-attachments/assets/dde8b43d-6dd4-4d79-a190-e7f35dadcf58" />
 
 
+As you see here, this can be used in the 3Dprinted case with 5 external buttons, which i designed and will be uploaded and linked here very soon, OR the display alone in any printed case you can find fort it.
+<img width="477" height="331" alt="grafik" src="https://github.com/user-attachments/assets/2fa547d2-53ec-42a5-bee8-218736c3be61" />
+If you only use the display, you can switch planes with a single click (it waits 1.4sec for the second input; so thats why you may think its slow), switch ranges with a doubleclick (again, in the first 1.4 seconds the second click should have happened), and switch orientation with a tripleclick (you have 1.4+1.2sec for the third click, so 2.6sec overall).
+
 > This repository is an independent fork. The original project and its authorship remain credited to [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
 ## What it does
