@@ -1,18 +1,15 @@
 #include "services/wifi_setup.h"
 
+#include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiManager.h>
-
-#include <cstdio>
-#include <cstring>
-
 #include <Preferences.h>
-#include <esp_system.h>
 #include <esp_wifi.h>
 
 #ifdef WM_MDNS
 #include <ESPmDNS.h>
 #endif
+
+#include <WiFiManager.h>
 
 #include "config.h"
 #include "services/radar_location.h"
@@ -23,90 +20,102 @@ portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_boot_tap_pending = false;
 volatile bool s_boot_is_down = false;
 volatile unsigned long s_boot_down_ms = 0;
+volatile unsigned long s_last_tap_ms = 0;
+volatile uint8_t s_tap_count = 0;
+
+// Sehr großzügige Zeitfenster für Senior-Freundlichkeit
+constexpr unsigned long kMultiClickWindowMs = 1200UL;  // 1.2s für 2./3. Klick
+constexpr unsigned long kSingleClickDelayMs = 1400UL;  // 1.4s Wartezeit auf Single
+
+volatile unsigned long s_first_tap_ms = 0;
+volatile bool s_pending_single_click = false;
+
 bool s_long_press_handled = false;
 bool s_boot_interrupt_attached = false;
 
 void IRAM_ATTR onBootButtonIsr() {
   const bool down = digitalRead(config::kBootPin) == LOW;
   const unsigned long now = millis();
+
   portENTER_CRITICAL_ISR(&s_boot_mux);
+
   if (down) {
     s_boot_is_down = true;
     s_boot_down_ms = now;
   } else if (s_boot_is_down) {
     const unsigned long held = now - s_boot_down_ms;
+
     if (held >= config::kBootTapMinMs && held < config::kBootResetHoldMs) {
+      if (s_tap_count > 0 && now - s_last_tap_ms <= kMultiClickWindowMs) {
+        s_tap_count = static_cast<uint8_t>(s_tap_count + 1);
+      } else {
+        s_tap_count = 1;
+        s_first_tap_ms = now;
+      }
+      s_last_tap_ms = now;
       s_boot_tap_pending = true;
+      s_pending_single_click = true;
     }
+
     s_boot_is_down = false;
   }
+
   portEXIT_CRITICAL_ISR(&s_boot_mux);
 }
 
 void initBootButton() {
   pinMode(config::kBootPin, INPUT_PULLUP);
+
   if (s_boot_interrupt_attached) {
     return;
   }
-  attachInterrupt(digitalPinToInterrupt(static_cast<uint8_t>(config::kBootPin)),
-                  onBootButtonIsr, CHANGE);
+
+  attachInterrupt(digitalPinToInterrupt(static_cast<int>(config::kBootPin)),
+                  onBootButtonIsr,
+                  CHANGE);
   s_boot_interrupt_attached = true;
 }
 
 namespace {
 
-/** Separate from planeradar prefs (rangeInit) to avoid NVS handle conflicts. */
 constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
 
 bool s_force_config_portal = false;
-WiFiManager s_wm;
-bool s_wm_configured = false;
-
-void ensureWifiManager();
-void startLanWebPortal();
-void stopLanWebPortal();
-bool wifiLinkUp();
 
 constexpr int kCoordParamLen = 20;
 constexpr char kCoordInputAttrs[] =
     " type=\"number\" step=\"0.000001\"";
 
 WiFiManagerParameter s_param_lat("radar_lat", "Latitude (deg)", "0",
-                                kCoordParamLen, kCoordInputAttrs);
+                                 kCoordParamLen, kCoordInputAttrs);
 WiFiManagerParameter s_param_lon("radar_lon", "Longitude (deg)", "0",
-                                kCoordParamLen, kCoordInputAttrs);
+                                 kCoordParamLen, kCoordInputAttrs);
 
 char s_miles_checkbox_attrs[32] = "type=\"checkbox\"";
-WiFiManagerParameter s_param_miles("use_miles", "Display distances in miles", "T", 2,
-                                   s_miles_checkbox_attrs, WFM_LABEL_AFTER);
-
-char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
-WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
-                                     s_runways_checkbox_attrs, WFM_LABEL_AFTER);
+WiFiManagerParameter s_param_miles(
+    "use_miles", "Display distances in miles", "T", 2,
+    s_miles_checkbox_attrs, WFM_LABEL_AFTER);
 
 void refreshPortalParamDefaults() {
-  char lat_buf[kCoordParamLen + 1];
-  char lon_buf[kCoordParamLen + 1];
-  snprintf(lat_buf, sizeof(lat_buf), "%.6f", services::location::lat());
-  snprintf(lon_buf, sizeof(lon_buf), "%.6f", services::location::lon());
-  s_param_lat.setValue(lat_buf, kCoordParamLen);
-  s_param_lon.setValue(lon_buf, kCoordParamLen);
-  snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
+  char latBuf[kCoordParamLen + 1];
+  char lonBuf[kCoordParamLen + 1];
+  snprintf(latBuf, sizeof(latBuf), "%.6f", services::location::lat());
+  snprintf(lonBuf, sizeof(lonBuf), "%.6f", services::location::lon());
+  s_param_lat.setValue(latBuf, kCoordParamLen);
+  s_param_lon.setValue(lonBuf, kCoordParamLen);
+  snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs),
+           "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
   s_param_miles.setValue("T", 2);
-  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
-           "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
-  s_param_runways.setValue("T", 2);
 }
 
 void onPortalParamsSaved() {
   if (!services::location::saveFromStrings(s_param_lat.getValue(),
                                            s_param_lon.getValue())) {
-    Serial.println("Invalid lat/lon in portal — keeping previous location");
+    Serial.println("Invalid lat/lon in portal - keeping previous location");
   }
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
-  ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
 
 void attachPortalParams(WiFiManager& wm) {
@@ -114,7 +123,6 @@ void attachPortalParams(WiFiManager& wm) {
   wm.addParameter(&s_param_lat);
   wm.addParameter(&s_param_lon);
   wm.addParameter(&s_param_miles);
-  wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
 
@@ -145,6 +153,7 @@ bool consumeForceConfigPortal() {
   }
   const bool pending = prefs.getBool(kPrefsForcePortalKey, false);
   prefs.end();
+
   if (!pending) {
     return false;
   }
@@ -171,15 +180,14 @@ bool storedWifiCredentials() {
 }
 
 void eraseWifiCredentials() {
-  stopLanWebPortal();
   WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_OFF);
   delay(100);
 
-  ensureWifiManager();
   WiFi.persistent(true);
-  s_wm.resetSettings();
-  s_wm.erase();
+  WiFiManager wm;
+  wm.resetSettings();
+  wm.erase();
   WiFi.disconnect(true, true);
   WiFi.persistent(false);
 
@@ -196,7 +204,6 @@ void resetWifiCredentials() {
 }
 
 void onConfigPortalApStarted(WiFiManager*) {
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   statusScreenPortal();
 #ifdef WM_MDNS
   if (MDNS.begin(config::kPortalHostname)) {
@@ -204,11 +211,22 @@ void onConfigPortalApStarted(WiFiManager*) {
     Serial.printf("Setup portal: http://%s.local (or http://%s)\n",
                   config::kPortalHostname, config::kPortalIp);
   } else {
-    Serial.printf("Setup portal: http://%s (mDNS unavailable)\n", config::kPortalIp);
+    Serial.printf("Setup portal: http://%s (mDNS unavailable)\n",
+                  config::kPortalIp);
   }
 #else
   Serial.printf("Setup portal: http://%s\n", config::kPortalIp);
 #endif
+}
+
+void configureWifiManager(WiFiManager& wm) {
+  wm.setConfigPortalTimeout(config::kWifiPortalTimeoutSec);
+  wm.setAPStaticIPConfig(IPAddress(192, 168, 4, 1),
+                         IPAddress(192, 168, 4, 1),
+                         IPAddress(255, 255, 255, 0));
+  wm.setHostname(config::kPortalHostname);
+  wm.setAPCallback(onConfigPortalApStarted);
+  attachPortalParams(wm);
 }
 
 bool wifiLinkUp() {
@@ -216,50 +234,7 @@ bool wifiLinkUp() {
          WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
-void ensureWifiManager() {
-  if (s_wm_configured) {
-    return;
-  }
-  s_wm.setConfigPortalTimeout(config::kWifiPortalTimeoutSec);
-  s_wm.setAPStaticIPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
-                           IPAddress(255, 255, 255, 0));
-  s_wm.setHostname(config::kPortalHostname);
-  s_wm.setAPCallback(onConfigPortalApStarted);
-  attachPortalParams(s_wm);
-  s_wm_configured = true;
-}
-
-void startLanWebPortal() {
-  if (!wifiLinkUp() || s_wm.getWebPortalActive() ||
-      s_wm.getConfigPortalActive()) {
-    return;
-  }
-  refreshPortalParamDefaults();
-  WiFi.mode(WIFI_STA);
-  s_wm.setConfigPortalBlocking(false);
-#ifdef WM_MDNS
-  MDNS.end();
-  if (MDNS.begin(config::kPortalHostname)) {
-    MDNS.addService("http", "tcp", 80);
-  }
-#endif
-  s_wm.startWebPortal();
-  Serial.printf("LAN config: http://%s.local or http://%s\n",
-                config::kPortalHostname, WiFi.localIP().toString().c_str());
-}
-
-void stopLanWebPortal() {
-  if (!s_wm.getWebPortalActive()) {
-    return;
-  }
-  s_wm.stopWebPortal();
-#ifdef WM_MDNS
-  MDNS.end();
-#endif
-}
-
 void prepareSta() {
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(WIFI_PS_NONE);
   WiFi.setAutoReconnect(true);
@@ -274,8 +249,8 @@ void startStaConnect(const String& ssid, const String& pass) {
   }
 }
 
-bool waitForLinkWithUi(const char* ssid_for_ui, unsigned long attempt_ms) {
-  const unsigned long deadline = millis() + attempt_ms;
+bool waitForLinkWithUi(const char*, unsigned long attemptMs) {
+  const unsigned long deadline = millis() + attemptMs;
   while (millis() < deadline) {
     if (wifiLinkUp()) {
       return true;
@@ -287,17 +262,18 @@ bool waitForLinkWithUi(const char* ssid_for_ui, unsigned long attempt_ms) {
   return wifiLinkUp();
 }
 
-bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
+bool tryConnectWithUi(const String& ssid, const String& pass, bool showUi) {
   if (wifiLinkUp()) {
     return true;
   }
 
-  const char* ui_ssid = ssid.length() > 0 ? ssid.c_str() : "network";
-  if (show_ui) {
-    statusScreenConnectingBegin(ui_ssid);
+  const char* uiSsid = ssid.length() > 0 ? ssid.c_str() : "network";
+  if (showUi) {
+    statusScreenConnectingBegin(uiSsid);
   }
 
-  for (uint8_t attempt = 1; attempt <= config::kWifiConnectAttempts; ++attempt) {
+  for (uint8_t attempt = 1; attempt <= config::kWifiConnectAttempts;
+       ++attempt) {
     if (attempt > 1) {
       Serial.printf("WiFi connect retry %u/%u\n", attempt,
                     config::kWifiConnectAttempts);
@@ -307,8 +283,7 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
     }
 
     startStaConnect(ssid, pass);
-
-    if (waitForLinkWithUi(ui_ssid, config::kWifiConnectAttemptMs)) {
+    if (waitForLinkWithUi(uiSsid, config::kWifiConnectAttemptMs)) {
       return true;
     }
   }
@@ -316,54 +291,36 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
   return false;
 }
 
-bool connectSavedNetwork(bool show_ui) {
-  wifi_mode_t mode = WIFI_MODE_NULL;
-  if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
-    WiFi.mode(WIFI_STA);
-    delay(50);
-  }
-
-  wifi_config_t conf = {};
-  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) {
+bool connectSavedNetwork(bool showUi) {
+  if (!storedWifiCredentials()) {
     return false;
   }
 
-  if (conf.sta.ssid[0] == '\0') {
+  WiFiManager wm;
+  const String ssid = wm.getWiFiSSID();
+  if (ssid.length() == 0) {
     return false;
   }
 
-  // ESP-IDF stores the SSID in a fixed 32-byte field. A maximum-length
-  // SSID has no room for a trailing NUL, so copy it to a larger buffer
-  // and explicitly terminate it before constructing an Arduino String.
-  char ssid_buf[sizeof(conf.sta.ssid) + 1] = {};
-  memcpy(ssid_buf, conf.sta.ssid, sizeof(conf.sta.ssid));
-  ssid_buf[sizeof(conf.sta.ssid)] = '\0';
-
-  char pass_buf[sizeof(conf.sta.password) + 1] = {};
-  memcpy(pass_buf, conf.sta.password, sizeof(conf.sta.password));
-  pass_buf[sizeof(conf.sta.password)] = '\0';
-
-  const String ssid(ssid_buf);
-  const String pass(pass_buf);
-
-  return tryConnectWithUi(ssid, pass, show_ui);
+  return tryConnectWithUi(ssid, wm.getWiFiPass(), showUi);
 }
 
-bool openConfigPortal() {
-  stopLanWebPortal();
+bool openConfigPortal(WiFiManager& wm) {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   delay(50);
   statusScreenPortal();
-  s_wm.setConfigPortalBlocking(false);
-  s_wm.startConfigPortal(config::kPortalApName);
-  while (s_wm.getConfigPortalActive()) {
+  wm.setConfigPortalBlocking(false);
+  wm.startConfigPortal(config::kPortalApName);
+
+  while (wm.getConfigPortalActive()) {
     bootButtonPollLongPress();
-    if (s_wm.process()) {
+    if (wm.process()) {
       return true;
     }
     delay(10);
   }
+
   return wifiLinkUp();
 }
 
@@ -373,6 +330,7 @@ bool wifiShowsSetupScreenOnBoot() {
   if (s_force_config_portal) {
     return true;
   }
+
   Preferences prefs;
   if (!prefs.begin(kWifiPrefsNamespace, true)) {
     return false;
@@ -386,16 +344,66 @@ bool wifiBootButtonPressed() {
   return digitalRead(config::kBootPin) == LOW;
 }
 
-void bootButtonInit() { initBootButton(); }
+void bootButtonInit() {
+  initBootButton();
+}
 
 bool bootButtonConsumeTap() {
   portENTER_CRITICAL(&s_boot_mux);
+
+  if (s_pending_single_click) {
+    if (millis() - s_first_tap_ms >= kSingleClickDelayMs) {
+      s_pending_single_click = false;
+      s_tap_count = 0;
+      s_boot_tap_pending = false;
+      portEXIT_CRITICAL(&s_boot_mux);
+      return true;
+    }
+    portEXIT_CRITICAL(&s_boot_mux);
+    return false;
+  }
+
   const bool tap = s_boot_tap_pending;
   if (tap) {
     s_boot_tap_pending = false;
   }
+
   portEXIT_CRITICAL(&s_boot_mux);
   return tap;
+}
+
+bool bootButtonConsumeDoubleClick() {
+  portENTER_CRITICAL(&s_boot_mux);
+
+  const bool doubleClick =
+      s_tap_count == 2 &&
+      millis() - s_last_tap_ms >= kMultiClickWindowMs;
+
+  if (doubleClick) {
+    s_tap_count = 0;
+    s_boot_tap_pending = false;
+    s_pending_single_click = false;
+  }
+
+  portEXIT_CRITICAL(&s_boot_mux);
+  return doubleClick;
+}
+
+bool bootButtonConsumeTripleClick() {
+  portENTER_CRITICAL(&s_boot_mux);
+
+  const bool tripleClick =
+      s_tap_count >= 3 &&
+      millis() - s_last_tap_ms <= kMultiClickWindowMs;
+
+  if (tripleClick) {
+    s_tap_count = 0;
+    s_boot_tap_pending = false;
+    s_pending_single_click = false;
+  }
+
+  portEXIT_CRITICAL(&s_boot_mux);
+  return tripleClick;
 }
 
 void bootButtonPollLongPress() {
@@ -405,18 +413,20 @@ void bootButtonPollLongPress() {
       s_boot_is_down = true;
       s_boot_down_ms = millis();
     }
-    const unsigned long down_ms = s_boot_down_ms;
+    const unsigned long downMs = s_boot_down_ms;
     portEXIT_CRITICAL(&s_boot_mux);
 
-    if (!s_long_press_handled &&
-        millis() - down_ms >= config::kBootResetHoldMs) {
+    if (!s_long_press_handled && millis() - downMs >= config::kBootResetHoldMs) {
       s_long_press_handled = true;
-      Serial.println("BOOT held — resetting WiFi");
+      Serial.println("BOOT held - resetting WiFi");
       wifiResetCredentialsAndReboot();
     }
   } else {
     portENTER_CRITICAL(&s_boot_mux);
     s_boot_is_down = false;
+    if (millis() - s_last_tap_ms > kMultiClickWindowMs) {
+      s_tap_count = 0;
+    }
     portEXIT_CRITICAL(&s_boot_mux);
     s_long_press_handled = false;
   }
@@ -435,39 +445,26 @@ bool wifiReconnect() {
   return connectSavedNetwork(true);
 }
 
-void wifiLoop() {
-  ensureWifiManager();
-  if (wifiLinkUp()) {
-    if (!s_wm.getWebPortalActive() && !s_wm.getConfigPortalActive()) {
-      startLanWebPortal();
-    }
-    if (s_wm.getWebPortalActive() || s_wm.getConfigPortalActive()) {
-      bootButtonPollLongPress();
-      s_wm.process();
-    }
-  } else {
-    stopLanWebPortal();
-  }
-}
-
 bool wifiSetupConnect() {
   initBootButton();
-  ensureWifiManager();
 
-  const bool force_portal = consumeForceConfigPortal();
+  const bool forcePortal = consumeForceConfigPortal();
   WiFi.setAutoReconnect(false);
 
-  if (force_portal) {
+  if (forcePortal) {
     eraseWifiCredentials();
     WiFi.mode(WIFI_OFF);
     delay(100);
   }
 
-  if (force_portal) {
+  WiFiManager wm;
+  configureWifiManager(wm);
+
+  if (forcePortal) {
     Serial.println("Opening WiFi setup portal (after reset)");
-    if (openConfigPortal() && wifiLinkUp()) {
+    if (openConfigPortal(wm) && wifiLinkUp()) {
       WiFi.setAutoReconnect(true);
-      Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
+      Serial.printf("Connected: %s IP %s\n", WiFi.SSID().c_str(),
                     WiFi.localIP().toString().c_str());
       return true;
     }
@@ -480,27 +477,27 @@ bool wifiSetupConnect() {
 
   if (wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
+    Serial.printf("Connected: %s IP %s\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
     return true;
   }
 
   if (storedWifiCredentials() && connectSavedNetwork(true)) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
+    Serial.printf("Connected: %s IP %s\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
     return true;
   }
 
   if (storedWifiCredentials()) {
-    Serial.println("Saved WiFi could not connect — opening setup portal");
+    Serial.println("Saved WiFi could not connect - opening setup portal");
   } else {
-    Serial.println("No saved WiFi — opening setup portal");
+    Serial.println("No saved WiFi - opening setup portal");
   }
 
-  if (openConfigPortal() && wifiLinkUp()) {
+  if (openConfigPortal(wm) && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
+    Serial.printf("Connected: %s IP %s\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
     return true;
   }
