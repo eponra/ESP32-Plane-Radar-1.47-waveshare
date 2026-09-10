@@ -1,209 +1,156 @@
-# Plane Radar
+# ESP32 Plane Radar — Waveshare ESP32-C6 LCD 1.47" Edition
 
-<img width="800" height="450" alt="plane-radar" src="https://github.com/user-attachments/assets/716d0992-dab8-47ba-8f1a-2aec7f607419" />
+A display adaptation and feature-enhanced fork of [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
-**3D printed case (STL + assembly):** [MakerWorld](https://makerworld.com/en/models/2872376-esp32-plane-radar-live-ads-b-on-a-round-display#profileId-3207083) · **Firmware:** [Releases](https://github.com/MatixYo/ESP32-Plane-Radar/releases)
+This version keeps the original idea — a compact ESP32-based ADS-B radar displaying nearby aircraft — and adapts it for the **Waveshare ESP32-C6-LCD-1.47**, featuring a 1.47-inch rectangular ST7789 display with 172 × 320 pixels. It also adds a selectable aircraft information panel and several hardware controls for brightness, display rotation, range selection, and aircraft selection.
 
-Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (240×240). Shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
+> This repository is an independent fork. The original project and its authorship remain credited to [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar).
 
 ## What it does
 
-1. **Wi‑Fi setup** (if needed) — captive portal on AP **`PlaneRadar-Setup`**
-2. **Radar** — live aircraft from [adsb.fi](https://opendata.adsb.fi/) on a sonar-style grid
+The firmware connects to Wi-Fi, retrieves live ADS-B aircraft data from adsb.fi, and displays a radar view centered on the configured location (standard is berlin BER!). An information panel provides detailed data for a selected aircraft.
 
-After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
+## Changes from the original
 
-## Controls (BOOT, GPIO 9, active LOW)
+### Hardware and display
 
-| Action | Effect |
-|--------|--------|
-| **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
-| **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
+- Support for the **Waveshare ESP32-C6-LCD-1.47** board.
+- Support for the rectangular **ST7789 display** with a resolution of 172 × 320 pixels.
+- Board-specific SPI, reset, data/command, chip-select, and backlight pin assignments.
+- Display inversion and RGB-order settings adapted for the Waveshare hardware.
+- PWM-controlled display backlight.
+- Runtime display rotation in 90-degree steps.
+- Layout code that adapts the information panel to portrait and landscape orientation.
 
-During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+### Additional controls
 
-## Wi‑Fi setup portal
+The original BOOT button remains available for next plane, range selection, display rotation and the long-press reset function. Additional buttons can be connected between the configured GPIO and GND:
 
-**First-time setup** (no saved Wi‑Fi):
+| Function | GPIO | Behaviour |
+|---|---:|---|
+| Range | GPIO 2 | Select the next radar range preset |
+| Aircraft selection | GPIO 4 | Select the next aircraft |
+| Brightness up | GPIO 0 | Increase backlight brightness |
+| Brightness down | GPIO 1 | Decrease backlight brightness |
+| Rotation | GPIO 5 | Rotate the display by 90 degrees |
 
-1. Connect to **`PlaneRadar-Setup`**
-2. Open **`http://plane-radar.local`** (preferred) or **`http://192.168.4.1`** — both are shown on the yellow setup screen; captive portal may open automatically
-3. Set home Wi‑Fi, then save
+All additional buttons use internal pull-ups and software debouncing (meaning you can simply add any buttons without extra hardware, it will work perfectly).
 
-**Reconfigure anytime** (after the device is on your network):
+### Brightness control
 
-1. Open **`http://plane-radar.local`** or **`http://<device-ip>`** (e.g. from your router or serial log at boot)
-2. Change Wi‑Fi, location, units, or runway overlay; save
+The display backlight can be adjusted through five brightness levels, if you use the pinout and solder on a button for that. If not you cant change it. The default startup level is 16% percent.
 
-The same portal runs on the setup AP and on the device’s LAN IP while connected to Wi‑Fi. mDNS hostname is `plane-radar` → **plane-radar.local** (`kPortalHostname` in `config.h`). Some clients resolve `.local` slowly; use the IP if needed.
+The current implementation uses the following 0-255 PWM values:
 
-**Custom fields** (stored in NVS):
+- 16
+- 30
+- 90
+- 150
+- 200
 
-| Field | Purpose |
-|-------|---------|
-| **Latitude / Longitude** | Radar center and ADS-B query position (defaults in `config.h` until set) |
-| **Display distances in miles** | Ring scale label in **mi** instead of **km** (e.g. `6mi` vs `10km`) |
-| **Show airport runways** | Major-airport runway overlay on the radar (off to hide) |
+There is no 255 brightness as that overheats and can damage/kill the panel.
 
-After a reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
+### Aircraft information panel
 
-## Radar display
+The original radar view is extended with an information panel for the currently selected aircraft. Pressing the aircraft-selection button (or the boot button once) cycles through all aircraft currently received by the ADS-B service.
 
-### Grid
+The panel displays:
 
-- Dark blue background, subdued green rings and crosshairs
-- White **N / S / E / W** at the bezel; range label on the **east** spoke (ring 3 = ¾ of outer radius)
-- White center dot
+- Callsign
+- Aircraft type
+- Registration
+- Altitude
+- Ground speed in knots
+- Heading
+- Aircraft category
+- Current selection and total aircraft count
 
-Layout and colors: `include/ui/radar_theme.h`.
+If no aircraft are available, the panel displays `No aircraft in range`.
 
-### Range presets
+### Aircraft category labels
 
-| Ring 3 label | Outer radius (aircraft scale) |
-|------------|-------------------------------|
-| 5 km / 3 mi | ~6.7 km |
-| 10 km / 6 mi | ~13.3 km (default) |
-| 15 km / 9 mi | ~20 km |
-| 25 km / 16 mi | ~33.3 km |
+ADS-B category codes are translated into readable labels where known. Examples include:
 
-Preset and miles/km choice persist across reboot (`planeradar` NVS namespace).
+- `A1` — Light
+- `A2` — Small
+- `A3` — Large
+- `A5` — Heavy
+- `A6` — High performance
+- `A7` — Rotorcraft
+- `B1` — Glider
+- `B2` — Airship
+- `B3` — Parachute
+- `B6` — UAV
+- `B7` — Space
 
-### Runways
+Unknown or unsupported category codes are displayed as received.
 
-- Major airports from OurAirports (`large_airport`); all open runway strips in range (helipads excluded)
-- Teal runway lines with one ICAO label per airport (e.g. `KJFK`); toggle in the Wi‑Fi setup portal
-- Update the embedded list: `python3 scripts/build_large_airports.py`
+### Update interval and default location
 
-### Aircraft
+- ADS-B updates are requested every 3 seconds instead of the original approximately 5-second interval.
+- The default radar location is set to Berlin, Germany, near BER Airport (you can always change that through reseting it with holding the boot-button for longer than sec):
+  - Latitude: `52.3676`
+  - Longitude: `13.5033`
+- The ADS-B fetch-radius scale is explicitly configurable through `kAdsbFetchRadiusScale`.
 
-- **Inside the outer ring** — red heading triangle, magenta speed vector (clipped at the ring), callsign / type / altitude tags
-- **Outside the ring** (still within ADS-B fetch) — small **red dot on the screen rim** at the correct bearing (direction cue; not distance-accurate past the ring)
-- **Tags** — placed toward the **center**: west (left) → tag on the **right** of the symbol; east (right) → tag on the **left**
+## Display and board configuration
 
-As range decreases (or aircraft approach), targets move inward; beyond-ring dots become full symbols when they cross the outer ring.
+The relevant settings are located in `include/config.h`.
 
-### ADS-B
-
-- Source: `https://opendata.adsb.fi/api/v3/`
-- Fetch radius: `ui::radar::fetchRadiusKm()` — scales with the active preset to roughly the screen edge (so rim dots have data)
-- Poll interval: `kAdsbFetchIntervalMs` (5 s) in `config.h`
-- Ground aircraft hidden by default (`kAdsbShowGroundAircraft`)
-
-## Configuration
-
-Edit **`include/config.h`** for hardware and behavior:
-
-| Area | Keys / notes |
-|------|----------------|
-| Portal | `kPortalApName`, `kPortalIp`, `kPortalHostname` / `kPortalHostUrl` (mDNS; needs `-DWM_MDNS` in `platformio.ini`) |
-| Wi‑Fi timing | connect attempts, reconnect grace, portal timeout (`0` = no timeout) |
-| BOOT | `kBootPin`, `kBootResetHoldMs`, `kBootTapMinMs` |
-| Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
-| Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
-| ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
-
-Range presets: `include/ui/radar_range.h` (`kRangePresets`).
-
-## Project layout
-
-```
-include/
-  config.h
-  hardware/
-    lgfx_config.hpp
-    display.h
-    display_font.h
-  data/
-    large_airports.h
-  ui/
-    radar_theme.h
-    radar_range.h
-    radar_display.h
-    runway_overlay.h
-    status_screens.h
-  services/
-    wifi_setup.h
-    radar_location.h
-    adsb_client.h
-data/
-  ui_font.vlw              — embedded smooth UI font (Noto Sans Bold)
-scripts/
-  build_large_airports.py
-src/
-  main.cpp
-  data/
-    large_airports_data.cpp
-  hardware/
-  ui/
-  services/
+```cpp
+constexpr int kDisplayWidth = 172;
+constexpr int kDisplayHeight = 320;
+constexpr uint32_t kDisplaySpiWriteHz = 40000000;
+constexpr bool kDisplayInvert = true;
+constexpr bool kDisplayRgbOrder = false;
 ```
 
-## Wiring (GC9A01 ↔ ESP32-C3 Super Mini)
+The Waveshare ESP32-C6-LCD-1.47 uses the following display connections:
 
-| Display | ESP32-C3 |
-|---------|----------|
-| VCC | 3V3 |
-| GND | GND |
-| RST | GPIO **0** |
-| CS | GPIO **1** |
-| DC | GPIO **10** |
-| SDA (MOSI) | GPIO **3** |
-| SCL (SCLK) | GPIO **4** |
-| BOOT (user) | GPIO **9** |
+| Display signal | ESP32-C6 GPIO |
+|---|---:|
+| LCD_RST | GPIO 21 |
+| LCD_CS | GPIO 14 |
+| LCD_DC | GPIO 15 |
+| SDA / MOSI | GPIO 6 |
+| SCL / SCLK | GPIO 7 |
+| Backlight | GPIO 22 |
 
-## Build
+## Building and uploading
+
+The project is intended to be built with PlatformIO. Open the project in PlatformIO, verify the selected environment and board configuration, then build and upload the firmware.
 
 ```bash
+pio run
 pio run -t upload
 pio device monitor
 ```
 
-- PlatformIO env: **`supermini`**
-- Serial: **115200** baud
-- USB CDC on boot enabled in `platformio.ini` for the Super Mini
-
-### Web-flashable release image
-
-Single `.bin` for [esptool-js](https://espressif.github.io/esptool-js/) and similar tools (ESP32-C3, 4 MB, flash at **0x0**):
-
-```bash
-chmod +x scripts/merge-firmware.sh   # once
-./scripts/merge-firmware.sh
-```
-
-Writes `release/plane-radar-merged.bin`. Skip rebuild if firmware is already built:
-
-```bash
-./scripts/merge-firmware.sh --no-build
-```
-
-Or via PlatformIO only (output: `.pio/build/supermini/firmware-merged.bin`):
-
-```bash
-pio run -e supermini
-pio run -t merge -e supermini
-```
-
-Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with Chrome/Edge over USB.
-
-### CI and releases (GitHub Actions)
-
-| Workflow | When | Output |
-|----------|------|--------|
-| [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-supermini` (merged + split `.bin` files, ~90 days) |
-| [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release asset `plane-radar-v1.0.0.bin` + `.sha256` |
-
-To ship a version users can download:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32-C3, 4 MB).
+The serial monitor uses 115200 baud.
 
 ## Dependencies
 
-- [LovyanGFX](https://github.com/lovyan03/LovyanGFX)
-- [WiFiManager](https://github.com/tzapu/WiFiManager)
-- [ArduinoJson](https://github.com/bblanchon/ArduinoJson)
+The project is based on the dependencies used by the original project, including:
+
+- LovyanGFX
+- WiFiManager
+- ArduinoJson
+
+## Project status
+
+This is a hardware-specific alternative version and is primarily intended for the Waveshare ESP32-C6-LCD-1.47. Other displays or ESP32 boards may require changes to the display driver, pin mapping, layout, and PlatformIO configuration.
+
+The firmware is still under active development. Hardware-specific details, UI layout, and controls may change as testing continues.
+
+## Credits
+
+This project is based on the original work by **MatixYo**:
+
+- Original project: [MatixYo/ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)
+- Original author: [MatixYo](https://github.com/MatixYo)
+
+Please refer to the original repository for the initial project concept, original radar implementation, and upstream history.
+
+## License
+
+This fork should retain the license of the original project and all required copyright and attribution notices. The upstream repository currently includes an MIT license; verify that your fork retains the original `LICENSE` file unchanged and add your own attribution for modifications where appropriate.
